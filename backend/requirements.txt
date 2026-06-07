@@ -1,0 +1,11 @@
+# Required
+openai>=1.0.0
+
+# Optional / recommended (enable if you plan to add web server or dotenv support)
+python-dotenv>=1.0.0
+anthropic==0.25.0
+fastapi==0.104.1
+uvicorn==0.24.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+aiohttp==3.9.0
