@@ -1,8 +1,12 @@
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Any, Coroutine
 from core.llm_client import LLMClient
+from core.memory import AgentMemory
+from core.logging_setup import get_logger
 
+logger = get_logger(__name__)
 
 @dataclass
 class Message:
@@ -21,7 +25,16 @@ class AgentState:
     status: str  # "idle", "working", "done", "error"
     current_task: Optional[str] = None
     output: Optional[str] = None
+    error: Optional[str] = None
     metadata: dict = None
+
+
+def _format_context(context: dict) -> str:
+    """Format previous agent outputs as context"""
+    return "\n".join([
+        f"{agent_id}: {output}"
+        for agent_id, output in context.items()
+    ])
 
 
 class BaseAgent(ABC):
@@ -35,32 +48,82 @@ class BaseAgent(ABC):
         self.state = AgentState(agent_id=agent_id, status="idle")
         self.message_history: list[Message] = []
         self.tools = []
+        self.memory = AgentMemory(agent_id)
+        self.memory.load()
+        logger.info(f"Agent initialized: {agent_id} ({role})")
 
     @abstractmethod
     def system_prompt(self) -> str:
         """Return the system prompt for this agent"""
         pass
 
-    @abstractmethod
-    async def execute(self, task: str, context: dict) -> str:
-        """Execute the agent's primary function"""
-        pass
+    async def execute(self, task: str, context: dict) -> str | None:
+        """Execute with retry logic, timeout, and memory context"""
+        if context is None:
+            context = {}
+
+        self.state.status = "working"
+        self.state.current_task = task
+        self.state.error = None
+
+        max_retries = 3
+        base_delay = 1.0
+
+        for attempt in range(max_retries):
+            try:
+                context_str = _format_context(context)
+                memory_context = self.memory.get_for_context()
+
+                full_prompt = task
+                if context_str or memory_context:
+                    full_prompt = f"{memory_context}\n{context_str}\n\n---\n\nYour task:\n{task}"
+
+                response = await asyncio.wait_for(
+                    asyncio.create_task(
+                        self._call_llm(full_prompt, {})
+                    ),
+                    timeout=60.0
+                )
+
+                self.state.status = "done"
+                self.state.output = response
+                return response
+
+            except asyncio.TimeoutError:
+                self.state.error = "Request timed out"
+                if attempt < max_retries - 1:
+                    wait_time = base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"{self.agent_id}: Timeout on attempt {attempt + 1}/{max_retries}. "
+                        f"Retrying in {wait_time}s"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.state.status = "error"
+                    raise
+
+            except Exception as e:
+                self.state.error = str(e)
+                if attempt < max_retries - 1:
+                    wait_time = base_delay * (2 ** attempt)
+                    logger.warning(
+                        f"{self.agent_id}: Error on attempt {attempt + 1}/{max_retries}: {e}. "
+                        f"Retrying in {wait_time}s"
+                    )
+                    await asyncio.sleep(wait_time)
+                else:
+                    self.state.status = "error"
+                    raise
+        return None
 
     async def _call_llm(self, task: str, context: dict) -> str:
         """Helper method to call LLM with system prompt and context"""
-        context_str = self._format_context(context)
+        context_str = _format_context(context)
         return await self.llm_client.call_agent(
             system_prompt=self.system_prompt(),
             user_message=task,
-            context=context_str
+            context=context_str or None
         )
-
-    def _format_context(self, context: dict) -> str:
-        """Format previous agent outputs as context"""
-        return "\n".join([
-            f"{agent_id}: {output}"
-            for agent_id, output in context.items()
-        ])
 
     def add_message(self, message: Message):
         """Track message in history"""
@@ -68,7 +131,7 @@ class BaseAgent(ABC):
 
     def get_context_summary(self) -> str:
         """Return recent message history as context"""
-        recent = self.message_history[-10:]  # Last 10 messages
+        recent = self.message_history[-10:]
         return "\n".join([
             f"{m.sender}: {m.content}" for m in recent
         ])
@@ -92,9 +155,6 @@ Always be concise and structure your findings as:
 3. GAPS: What's unclear or needs more research
 4. CONFIDENCE: Your confidence level (High/Medium/Low)"""
 
-    async def execute(self, task: str, context: dict) -> str:
-        return await self._call_llm(task, context)
-
 
 class AnalystAgent(BaseAgent):
     """Agent specialized in analyzing and synthesizing information"""
@@ -113,9 +173,6 @@ Always structure your analysis as:
 2. INSIGHTS: What does this mean
 3. STRUCTURE: How should this be organized
 4. NEXT_STEPS: What information is needed next"""
-
-    async def execute(self, task: str, context: dict) -> str:
-        return await self._call_llm(task, context)
 
 
 class WriterAgent(BaseAgent):
@@ -136,9 +193,6 @@ Always structure your output as:
 3. READING_LEVEL: Estimated difficulty/reading level
 4. REFINEMENT_NOTES: What could be improved"""
 
-    async def execute(self, task: str, context: dict) -> str:
-        return await self._call_llm(task, context)
-
 
 class ValidatorAgent(BaseAgent):
     """Agent specialized in quality assurance and validation"""
@@ -157,6 +211,3 @@ Always structure your feedback as:
 2. ISSUES_FOUND: Specific problems identified
 3. IMPROVEMENTS: Concrete suggestions for improvement
 4. FINAL_VERDICT: Pass/Needs Revision/Reject"""
-
-    async def execute(self, task: str, context: dict) -> str:
-        return await self._call_llm(task, context)

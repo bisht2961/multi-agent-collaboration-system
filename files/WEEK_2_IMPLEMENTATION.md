@@ -224,7 +224,7 @@ async def execute(self, task: str, context: Dict[str, str] = None) -> str:
     """
     if context is None:
         context = {}
-    
+     
     self.state.status = "working"
     self.state.current_task = task
     

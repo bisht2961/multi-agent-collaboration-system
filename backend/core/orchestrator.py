@@ -72,6 +72,11 @@ class Orchestrator:
             task.status = TaskStatus.COMPLETED
             task.completed_at = datetime.now()
 
+            # Save all agent memories (NEW)
+            for agent in self.agents.values():
+                if hasattr(agent, 'memory'):
+                    agent.memory.save()
+
             # Log execution
             execution_time = (task.completed_at - start_time).total_seconds()
             self.execution_log.append({
