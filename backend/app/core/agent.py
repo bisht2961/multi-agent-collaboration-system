@@ -1,10 +1,10 @@
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Any, Coroutine
-from core.llm_client import LLMClient
-from core.memory import AgentMemory
-from core.logging_setup import get_logger
+from typing import Optional
+from app.core.llm_client import LLMClient
+from app.core.memory import AgentMemory
+from app.core.logging_setup import get_logger
 
 logger = get_logger(__name__)
 

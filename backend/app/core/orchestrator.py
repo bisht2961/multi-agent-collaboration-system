@@ -1,11 +1,9 @@
 from enum import Enum
 from typing import Optional, Dict, List
-import asyncio
-import json
 import logging
 from datetime import datetime
 
-from core.agent import BaseAgent
+from app.core.agent import BaseAgent
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ import requests
 import json
 import asyncio
 from typing import Optional
-from config.env_config import settings
+from app.config.env_config import settings
 
 
 
