@@ -7,6 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
+from app.config.env_config import settings
+
 from app.core.agent import ResearchAgent, AnalystAgent, WriterAgent, ValidatorAgent
 from app.core.orchestrator import Orchestrator, Task
 from app.core.logging_setup import setup_logging, get_logger
@@ -87,11 +89,9 @@ async def global_exception_handler(request, exc):
 # ============================================================================
 
 if __name__ == "__main__":
-    # Run: python app/main.py
-    # Access: http://localhost:8000
     uvicorn.run(
         "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True
+        host=settings.host,
+        port=settings.port,
+        reload=settings.debug
     )
