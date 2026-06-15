@@ -8,6 +8,15 @@ Building a production-grade multi-agent system that orchestrates specialized AI 
 
 ---
 
+## Deployment
+
+### Backend (Railway)
+- **Status:** Live
+- **URL:** [https://multi-agent-collaboration-system-production.up.railway.app](https://multi-agent-collaboration-system-production.up.railway.app)
+- **Platform:** Railway
+
+---
+
 ## Phase 1: Foundation (Weeks 1-2) - MVP Core
 
 ### Goals
