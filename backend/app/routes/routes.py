@@ -5,7 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
-from app.core.orchestrator import Orchestrator, Task
+from app.core.orchestrator import ParallelOrchestrator, Task
 from app.core.connection_manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ class CreateTaskRequest(BaseModel):
     }
 
 
-def create_router(orchestrator: Orchestrator, manager: ConnectionManager) -> APIRouter:
+def create_router(orchestrator: ParallelOrchestrator, manager: ConnectionManager) -> APIRouter:
     router = APIRouter()
 
     @router.get("/")
@@ -74,7 +74,7 @@ def create_router(orchestrator: Orchestrator, manager: ConnectionManager) -> API
             workflow=request.workflow
         )
 
-        result = await orchestrator.execute_task(task)
+        result = await orchestrator.execute_task_parallel(task)
 
         for agent in orchestrator.agents.values():
             if hasattr(agent, 'memory'):
@@ -82,6 +82,23 @@ def create_router(orchestrator: Orchestrator, manager: ConnectionManager) -> API
 
         return result
 
+    @router.get("/api/cache/stats")
+    async def get_cache_stats():
+        """Get caching statistics"""
+        stats = {}
+        for agent in orchestrator.agents.values():
+            if hasattr(agent, 'cache'):
+                stats[agent.agent_id] = agent.cache.get_stats()
+        return {"cache_stats": stats}
+
+    @router.post("/api/cache/clear")
+    async def clear_cache():
+        """Clear all caches"""
+        for agent in orchestrator.agents.values():
+            if hasattr(agent, 'cache'):
+                agent.cache.clear()
+        return {"status": "cache cleared"}
+    
     @router.websocket("/ws/task")
     async def websocket_task_endpoint(websocket: WebSocket):
         await manager.connect(websocket)
@@ -107,44 +124,28 @@ def create_router(orchestrator: Orchestrator, manager: ConnectionManager) -> API
 
                 start_time = datetime.now()
 
-                for i, agent_id in enumerate(task.workflow):
-                    if agent_id not in orchestrator.agents:
-                        await manager.broadcast({
-                            "event": "error",
-                            "message": f"Agent {agent_id} not found"
-                        })
-                        continue
+                try:
+                    # Use parallel execution
+                    results = await orchestrator.execute_task_parallel(task)
+                    task.results = results
 
-                    agent = orchestrator.agents[agent_id]
-
-                    await manager.broadcast({
-                        "event": "agent_start",
-                        "agent_id": agent_id,
-                        "step": i + 1,
-                        "total_steps": len(task.workflow),
-                        "timestamp": datetime.now().isoformat()
-                    })
-
-                    try:
-                        result = await agent.execute(task.description, task.results)
-                        task.results[agent_id] = result
-
+                    # Broadcast individual agent completion events
+                    for agent_id, result in results.items():
                         await manager.broadcast({
                             "event": "agent_complete",
                             "agent_id": agent_id,
-                            "output_preview": result[:300],
-                            "output_length": len(result),
+                            "output_preview": result[:300] if isinstance(result, str) else str(result)[:300],
+                            "output_length": len(result) if isinstance(result, str) else len(str(result)),
                             "timestamp": datetime.now().isoformat()
                         })
 
-                    except Exception as e:
-                        await manager.broadcast({
-                            "event": "agent_error",
-                            "agent_id": agent_id,
-                            "error": str(e),
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        logger.error(f"Agent {agent_id} error: {e}")
+                except Exception as e:
+                    await manager.broadcast({
+                        "event": "error",
+                        "message": f"Task execution failed: {str(e)}",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    logger.error(f"Task execution error: {e}")
 
                 execution_time = (datetime.now() - start_time).total_seconds()
 

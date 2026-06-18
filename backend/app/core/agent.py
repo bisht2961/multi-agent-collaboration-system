@@ -2,6 +2,8 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
+
+from app.core.cache import ResponseCache
 from app.core.llm_client import LLMClient
 from app.core.memory import AgentMemory
 from app.core.logging_setup import get_logger
@@ -50,6 +52,7 @@ class BaseAgent(ABC):
         self.tools = []
         self.memory = AgentMemory(agent_id)
         self.memory.load()
+        self.cache = ResponseCache()
         logger.info(f"Agent initialized: {agent_id} ({role})")
 
     @abstractmethod
@@ -61,6 +64,11 @@ class BaseAgent(ABC):
         """Execute with retry logic, timeout, and memory context"""
         if context is None:
             context = {}
+
+        cached = self.cache.get(self.agent_id, task)
+        if cached:
+            print(f"✓ {self.agent_id}: Cache hit!")
+            return cached
 
         self.state.status = "working"
         self.state.current_task = task
@@ -87,6 +95,7 @@ class BaseAgent(ABC):
 
                 self.state.status = "done"
                 self.state.output = response
+                self.cache.set(self.agent_id, task, response)
                 return response
 
             except asyncio.TimeoutError:

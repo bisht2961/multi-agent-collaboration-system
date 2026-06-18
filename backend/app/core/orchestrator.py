@@ -1,7 +1,9 @@
 from enum import Enum
-from typing import Optional, Dict, List
+from typing import Optional
 import logging
 from datetime import datetime
+import asyncio
+from typing import List, Set, Dict
 
 from app.core.agent import BaseAgent
 
@@ -115,3 +117,48 @@ class Orchestrator:
             "max_execution_time": max(times),
             "total_time": sum(times)
         }
+
+
+class ParallelOrchestrator(Orchestrator):
+    """Execute agents in parallel where dependencies allow"""
+
+    def get_dependencies(self) -> Dict[str, Set[str]]:
+        """Define which agents depend on which"""
+        return {
+            "research": set(),  # No dependencies
+            "analyze": {"research"},  # Depends on research
+            "write": {"research", "analyze"},  # Depends on both
+            "validate": {"write"}  # Depends on write
+        }
+
+    async def execute_task_parallel(self, task):
+        """Execute with parallelization where possible"""
+
+        dependencies = self.get_dependencies()
+        completed = set()
+        results = {}
+
+        while len(completed) < len(self.agents):
+            # Find agents with no pending dependencies
+            ready = [
+                agent_id for agent_id in self.agents
+                if agent_id not in completed
+                   and dependencies[agent_id].issubset(completed)
+            ]
+
+            if not ready:
+                break
+
+            # Execute ready agents in parallel
+            tasks = [
+                self.agents[agent_id].execute(task.description, results)
+                for agent_id in ready
+            ]
+
+            responses = await asyncio.gather(*tasks)
+
+            for agent_id, response in zip(ready, responses):
+                results[agent_id] = response
+                completed.add(agent_id)
+
+        return results

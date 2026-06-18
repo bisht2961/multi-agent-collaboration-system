@@ -1,87 +1,85 @@
 import logging
+from contextlib import asynccontextmanager
 from datetime import datetime
 
-from app.core.connection_manager import ConnectionManager
-
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from app.config.env_config import settings
-
-from app.core.agent import ResearchAgent, AnalystAgent, WriterAgent, ValidatorAgent
-from app.core.orchestrator import Orchestrator, Task
+from app.config.fastapi_config import create_fastapi_app
+from app.core.connection_manager import ConnectionManager
 from app.core.logging_setup import setup_logging, get_logger
+from app.core.orchestrator_setup import setup_orchestrator
 from app.routes.routes import create_router
 
 logger = get_logger(__name__)
 
 # ============================================================================
-# INITIALIZATION
+# LIFESPAN MANAGER (replaces deprecated on_event decorators)
 # ============================================================================
 
-app = FastAPI(title="Multi-Agent System", version="1.0.0")
-
-# CORS - Allow requests from anywhere (important for deployments)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Initialize orchestrator and agents
-orchestrator = Orchestrator()
-
-# Register agents
-research_agent = ResearchAgent("research", "Research Specialist")
-analyst_agent = AnalystAgent("analyze", "Data Analyst")
-writer_agent = WriterAgent("write", "Content Writer")
-validator_agent = ValidatorAgent("validate", "QA Validator")
-
-orchestrator.register_agent(research_agent)
-orchestrator.register_agent(analyst_agent)
-orchestrator.register_agent(writer_agent)
-orchestrator.register_agent(validator_agent)
-
-manager = ConnectionManager()
-
-# Include all routes
-app.include_router(create_router(orchestrator, manager))
-
-
-# ============================================================================
-# STARTUP/SHUTDOWN
-# ============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize on server start"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application startup and shutdown events
+    
+    This replaces the deprecated @app.on_event("startup") and 
+    @app.on_event("shutdown") decorators.
+    """
+    # Startup
     setup_logging(level="INFO")
     logger.info("FastAPI server started")
-    logger.info(f"Agents registered: {list(orchestrator.agents.keys())}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on server shutdown"""
+    logger.info(f"Agents registered: {list(app.state.orchestrator.agents.keys())}")
+    
+    yield
+    
+    # Shutdown
     logger.info("FastAPI server shutting down")
 
 
 # ============================================================================
-# ERROR HANDLERS
+# APPLICATION INITIALIZATION
+# ============================================================================
+
+# Create and configure FastAPI app with CORS, OpenAPI, and lifespan
+app = create_fastapi_app(lifespan=lifespan)
+
+# Initialize orchestrator with all agents and connection manager
+orchestrator = setup_orchestrator()
+manager = ConnectionManager()
+
+# Store in app state for access throughout the application
+app.state.orchestrator = orchestrator
+app.state.manager = manager
+
+# Include all API routes
+app.include_router(create_router(orchestrator, manager))
+
+
+# ============================================================================
+# GLOBAL EXCEPTION HANDLER
 # ============================================================================
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    """Handle unexpected errors"""
-    logger.error(f"Unhandled exception: {exc}")
-    return {
-        "status": "error",
-        "message": str(exc),
-        "timestamp": datetime.now().isoformat()
-    }
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Handle unexpected errors with proper logging and response
+    
+    Args:
+        request: The incoming request that caused the error
+        exc: The exception that was raised
+        
+    Returns:
+        JSONResponse with error details and timestamp
+    """
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "message": str(exc),
+            "timestamp": datetime.now().isoformat()
+        }
+    )
 
 
 # ============================================================================
