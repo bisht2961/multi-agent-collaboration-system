@@ -1,4 +1,6 @@
 
+'use client';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { WebSocketMessage } from '../types';
 
@@ -15,68 +17,73 @@ export function useWebSocket(
 ) {
   const [isConnected, setIsConnected] = useState(false);
   const ws = useRef<WebSocket | null>(null);
+  // Keep options in a ref so callbacks never go stale without causing reconnects
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
-  useEffect(() => {
-    // Construct WebSocket URL. Accept full ws/wss/http(s) URLs or relative paths.
+  const buildWsUrl = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    let wsUrl: string;
-
-    if (url.startsWith('ws://') || url.startsWith('wss://')) {
-      wsUrl = url; // already a websocket URL
-    } else if (url.startsWith('http://') || url.startsWith('https://')) {
-      // convert http(s) to ws(s)
-      wsUrl = url.replace(/^https?:/, protocol === 'wss:' ? 'wss:' : 'ws:');
-    } else {
-      // relative path, build from current host
-      wsUrl = `${protocol}//${window.location.host}${url}`;
+    if (url.startsWith('ws://') || url.startsWith('wss://')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url.replace(/^https?:/, protocol === 'wss:' ? 'wss:' : 'ws:');
     }
+    return `${protocol}//${window.location.host}${url}`;
+  }, [url]);
 
-    const connect = () => {
-      try {
-        ws.current = new WebSocket(wsUrl);
+  const connect = useCallback(() => {
+    const readyState = ws.current?.readyState;
+    if (readyState === WebSocket.OPEN || readyState === WebSocket.CONNECTING) return;
 
-        ws.current.onopen = () => {
-          setIsConnected(true);
-          options.onOpen?.();
-        };
+    try {
+      ws.current = new WebSocket(buildWsUrl());
 
-        ws.current.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            options.onMessage?.(message);
-          } catch (error) {
-            console.error('Failed to parse WebSocket message:', error);
-          }
-        };
+      ws.current.onopen = () => {
+        setIsConnected(true);
+        optionsRef.current.onOpen?.();
+      };
 
-        ws.current.onerror = (error) => {
-          const err = new Error('WebSocket error');
-          options.onError?.(err);
-        };
+      ws.current.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          optionsRef.current.onMessage?.(message);
+        } catch (error) {
+          console.error('Failed to parse WebSocket message:', error);
+        }
+      };
 
-        ws.current.onclose = () => {
-          setIsConnected(false);
-          options.onClose?.();
-        };
-      } catch (error) {
-        options.onError?.(new Error('Failed to connect'));
-      }
-    };
+      ws.current.onerror = (event) => {
+        const error = new Error('WebSocket connection error');
+        console.error('WebSocket error:', event, error);
+        optionsRef.current.onError?.(error);
+      };
 
-    connect();
+      ws.current.onclose = () => {
+        setIsConnected(false);
+        optionsRef.current.onClose?.();
+      };
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error('Failed to connect to WebSocket');
+      console.error('WebSocket connection failed:', err);
+      optionsRef.current.onError?.(err);
+    }
+  }, [buildWsUrl]);
 
-    return () => {
-      if (ws.current) {
-        ws.current.close();
-      }
-    };
-  }, [url, options]);
+  const disconnect = useCallback(() => {
+    ws.current?.close();
+    ws.current = null;
+  }, []);
 
-  const send = useCallback((message: any) => {
-    if (ws.current && isConnected) {
+  const send = useCallback((message: unknown) => {
+    if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(message));
     }
-  }, [isConnected]);
+  }, []);
 
-  return { isConnected, send, ws: ws.current };
+  // Connect on mount and close on unmount
+  useEffect(() => {
+    connect();
+    return () => { ws.current?.close(); };
+  }, [connect]);
+
+  return { isConnected, send, connect, disconnect };
 }

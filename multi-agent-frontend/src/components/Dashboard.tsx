@@ -69,7 +69,7 @@ export function Dashboard() {
     return '/ws/task';
   }, []);
 
-  const { isConnected, send } = useWebSocket(getApiUrl(), {
+  const { isConnected, send, connect, disconnect } = useWebSocket(getApiUrl(), {
     onMessage: (message) => {
       switch (message.event) {
         case 'agent_start':
@@ -124,6 +124,12 @@ export function Dashboard() {
       setConnectionStatus('Connection Failed');
     },
   });
+
+  // Ensure WebSocket is connected while this component is mounted
+  useEffect(() => {
+    connect();
+    return () => { disconnect(); };
+  }, [connect, disconnect]);
 
   const handleTaskSubmit = useCallback(
     (description: string) => {

@@ -1,15 +1,15 @@
-'use client';
+"use client";
 
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState } from 'react';
 import { Header } from '@/components/Header';
 import { TaskForm } from '@/components/TaskForm';
 import { AgentCrew } from '@/components/AgentCrew';
+import { CompleteResultsScreen } from '@/components/CompleteResultsScreen';
 import { useWebSocket } from '@/hooks/useWebSocket';
-import type { WebSocketMessage } from '@/types';
 
-type AgentStatus = 'idle' | 'running' | 'complete' | 'error';
+type AgentStatus = 'idle' | 'running' | 'complete';
 
-interface UIAgent {
+type Agent = {
   id: string;
   icon: string;
   name: string;
@@ -17,9 +17,11 @@ interface UIAgent {
   status: AgentStatus;
   progress: number;
   color: 'cyan' | 'purple' | 'green' | 'orange';
-}
+  borderColor: 'cyan' | 'purple' | 'green' | 'orange';
+  progressBarColor: string;
+};
 
-const INITIAL_AGENTS: UIAgent[] = [
+const INITIAL_AGENTS: Agent[] = [
   {
     id: 'research',
     icon: '🔍',
@@ -28,6 +30,8 @@ const INITIAL_AGENTS: UIAgent[] = [
     status: 'idle' as const,
     progress: 0,
     color: 'cyan' as const,
+    borderColor: 'cyan' as const,
+    progressBarColor: 'bg-gradient-to-r from-cyan-500 to-blue-500',
   },
   {
     id: 'analyst',
@@ -37,6 +41,8 @@ const INITIAL_AGENTS: UIAgent[] = [
     status: 'idle' as const,
     progress: 0,
     color: 'purple' as const,
+    borderColor: 'purple' as const,
+    progressBarColor: 'bg-gradient-to-r from-purple-500 to-pink-500',
   },
   {
     id: 'writer',
@@ -46,6 +52,8 @@ const INITIAL_AGENTS: UIAgent[] = [
     status: 'idle' as const,
     progress: 0,
     color: 'green' as const,
+    borderColor: 'green' as const,
+    progressBarColor: 'bg-gradient-to-r from-green-500 to-emerald-500',
   },
   {
     id: 'validator',
@@ -55,6 +63,8 @@ const INITIAL_AGENTS: UIAgent[] = [
     status: 'idle' as const,
     progress: 0,
     color: 'orange' as const,
+    borderColor: 'orange' as const,
+    progressBarColor: 'bg-gradient-to-r from-orange-500 to-yellow-500',
   },
 ];
 
@@ -62,6 +72,10 @@ export default function Home() {
   const [agents, setAgents] = useState(INITIAL_AGENTS);
   const [isRunning, setIsRunning] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [taskComplete, setTaskComplete] = useState(false);
+  const [taskOutput, setTaskOutput] = useState('');
+  const [executionTime, setExecutionTime] = useState(0);
+  const [outputLength, setOutputLength] = useState(0);
 
   const getApiUrl = useCallback(() => {
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
@@ -69,17 +83,13 @@ export default function Home() {
   }, []);
 
   const { isConnected: wsConnected, send } = useWebSocket(getApiUrl(), {
-    onMessage: (message: WebSocketMessage) => {
+    onMessage: (message) => {
       switch (message.event) {
         case 'agent_start':
           setAgents((prev) =>
             prev.map((agent) =>
               agent.id === message.agent_id
-                ? {
-                    ...agent,
-                    status: 'running',
-                    progress: 50,
-                  }
+                ? { ...agent, status: 'running' as const, progress: 50 }
                 : agent
             )
           );
@@ -89,23 +99,34 @@ export default function Home() {
           setAgents((prev) =>
             prev.map((agent) =>
               agent.id === message.agent_id
-                ? {
-                    ...agent,
-                    status: 'complete',
-                    progress: 100,
-                  }
+                ? { ...agent, status: 'complete' as const, progress: 100 }
                 : agent
             )
           );
           break;
 
         case 'task_complete':
+          const output = message.results.write || '';
+          setTaskOutput(output);
+          setOutputLength(output.length);
+          setExecutionTime(message.execution_time);
+          setTaskComplete(true);
           setIsRunning(false);
           break;
       }
     },
-    onOpen: () => setIsConnected(true),
-    onClose: () => setIsConnected(false),
+    onOpen: () => {
+      console.log('WebSocket connected');
+      setIsConnected(true);
+    },
+    onClose: () => {
+      console.log('WebSocket disconnected');
+      setIsConnected(false);
+    },
+    onError: (error) => {
+      console.error('WebSocket error:', error);
+      setIsConnected(false);
+    },
   });
 
   const handleSubmit = useCallback(
@@ -117,6 +138,8 @@ export default function Home() {
 
       setAgents(INITIAL_AGENTS);
       setIsRunning(true);
+      setTaskComplete(false);
+      setTaskOutput('');
 
       send({
         task_id: `task_${Date.now()}`,
@@ -127,11 +150,57 @@ export default function Home() {
     [wsConnected, send]
   );
 
+  const handleNewTask = () => {
+    setTaskComplete(false);
+    setTaskOutput('');
+    setAgents(INITIAL_AGENTS);
+  };
+
+  const metrics = [
+    {
+      icon: '⏱️',
+      label: 'Execution Time',
+      value: `${executionTime.toFixed(1)}s`,
+      color: 'cyan' as const,
+    },
+    {
+      icon: '🤖',
+      label: 'Agents Used',
+      value: '4',
+      color: 'purple' as const,
+    },
+    {
+      icon: '📊',
+      label: 'Output Size',
+      value: `${outputLength} chars`,
+      color: 'green' as const,
+    },
+    {
+      icon: '⚡',
+      label: 'Cache Status',
+      value: 'MISS',
+      color: 'orange' as const,
+    },
+  ];
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950">
       <Header isConnected={isConnected} />
-      <TaskForm onSubmit={handleSubmit} isLoading={isRunning} />
-      <AgentCrew agents={agents} isRunning={isRunning} />
+
+      {taskComplete ? (
+        <CompleteResultsScreen
+          agents={agents}
+          output={taskOutput}
+          executionTime={executionTime}
+          metrics={metrics}
+          onNewTask={handleNewTask}
+        />
+      ) : (
+        <>
+          <TaskForm onSubmit={handleSubmit} isLoading={isRunning} />
+          {isRunning && <AgentCrew agents={agents} isRunning={isRunning} />}
+        </>
+      )}
     </div>
   );
 }
